@@ -3,6 +3,7 @@
 module SolidRespRactor
   class Reader
     CRLF = "\r\n"
+    COMPACT_THRESHOLD = 16 * 1024
 
     attr_reader :source
 
@@ -312,7 +313,8 @@ module SolidRespRactor
     end
 
     def compact_buffer
-      return if @offset.zero?
+      return if @offset < COMPACT_THRESHOLD
+      return if @offset < @buffer.bytesize / 2
 
       @buffer = @buffer.byteslice(@offset..) || +""
       @offset = 0

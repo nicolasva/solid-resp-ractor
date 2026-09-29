@@ -76,6 +76,12 @@ reader = codec.reader(socket, read_timeout: 1.0)
 `SolidRespRactor::DEFAULT_CODEC` is Ractor-shareable. A custom codec is also
 shareable when all injected collaborators are shareable.
 
+Decoded responses are not automatically Ractor-shareable. Typed wrappers are
+frozen, but mutable strings, arrays, hashes, and nested values they contain are
+not deeply frozen. Transform a response explicitly with
+`Ractor.make_shareable` (copying it first when mutation must remain possible)
+before sending it to another Ractor.
+
 ## Reading RESP streams
 
 The default reader accepts blocking IO objects such as `StringIO`, as well as
@@ -250,7 +256,16 @@ ractor.take
 
 Create sockets and readers inside their owning Ractor. Custom handlers,
 encoders, selectors, and clocks must themselves be Ractor-shareable if they
-are passed between Ractors.
+are passed between Ractors. Responses remain local to the reader's Ractor
+unless the application explicitly transforms them into shareable values.
+
+## Buffer management
+
+The reader advances a virtual cursor through buffered bytes. It clears a fully
+consumed buffer immediately and compacts a partially consumed buffer only
+after at least 16 KiB have been consumed and that prefix occupies at least half
+of the buffer. This avoids copying a large unread suffix after small fragmented
+reads while still releasing consumed data during long-lived streams.
 
 ## Development
 
