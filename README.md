@@ -1,5 +1,10 @@
 # Solid RESP Ractor
 
+[![Build Status](https://github.com/nicolasva/solid-resp-ractor/actions/workflows/ci.yml/badge.svg)](https://github.com/nicolasva/solid-resp-ractor/actions/workflows/ci.yml)
+[![Gem Version](https://badge.fury.io/rb/solid-resp-ractor.svg)](https://rubygems.org/gems/solid-resp-ractor)
+[![Downloads](https://img.shields.io/gem/dt/solid-resp-ractor?style=flat)](https://rubygems.org/gems/solid-resp-ractor)
+[![Documentation Status](https://img.shields.io/badge/docs-RubyDoc.info-blue.svg)](https://www.rubydoc.info/gems/solid-resp-ractor)
+
 `solid-resp-ractor` is a dependency-free RESP2/RESP3 codec for Ruby. It keeps
 protocol parsing independent from Redis client behavior and provides explicit
 extension points for transports, event loops, error hierarchies, value
