@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.3] - 2026-09-30
+
+### Changed
+
+- Use direct socket readiness waits by default while preserving custom selector
+  compatibility.
+- Cache common RESP array and bulk headers and add a fast path for flat Redis
+  commands.
+- Parse RESP type bytes and CRLF terminators without temporary strings.
+- Reduce a representative flat-command encoding benchmark from seven to three
+  allocations per operation while increasing throughput by approximately 40%.
+
 ## [0.1.2] - 2026-09-29
 
 ### Added
@@ -38,6 +50,7 @@ All notable changes to this project are documented in this file.
   input, and parallel Ractors.
 - Ractor-shareable default encoder with no global mutable state.
 
+[0.1.3]: https://github.com/nicolasva/solid-resp-ractor/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/nicolasva/solid-resp-ractor/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/nicolasva/solid-resp-ractor/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/nicolasva/solid-resp-ractor/releases/tag/v0.1.0

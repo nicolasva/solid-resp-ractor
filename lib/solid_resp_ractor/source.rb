@@ -18,6 +18,18 @@ module SolidRespRactor
       def call(readers, writers, timeout)
         IO.select(readers, writers, nil, timeout)
       end
+
+      def wait(io, event, timeout)
+        if event == :read && io.respond_to?(:wait_readable)
+          io.wait_readable(timeout)
+        elsif event == :write && io.respond_to?(:wait_writable)
+          io.wait_writable(timeout)
+        else
+          readers = event == :read ? [io] : nil
+          writers = event == :write ? [io] : nil
+          call(readers, writers, timeout)
+        end
+      end
     end
   end
 
@@ -50,9 +62,8 @@ module SolidRespRactor
           raise_timeout(timeout) if remaining && remaining <= 0
 
           selectable = @io.respond_to?(:to_io) ? @io.to_io : @io
-          readers = chunk == :wait_readable ? [selectable] : nil
-          writers = chunk == :wait_writable ? [selectable] : nil
-          raise_timeout(timeout) unless @selector.call(readers, writers, remaining)
+          event = chunk == :wait_readable ? :read : :write
+          raise_timeout(timeout) unless wait(selectable, event, remaining)
         end
       rescue IOError, SystemCallError => error
         raise ConnectionError, error.message, cause: error
@@ -61,7 +72,7 @@ module SolidRespRactor
       def wait_readable(timeout)
         return true unless @io.respond_to?(:to_io)
 
-        !@selector.call([@io.to_io], nil, timeout).nil?
+        !wait(@io.to_io, :read, timeout).nil?
       rescue IOError, SystemCallError => error
         raise ConnectionError, error.message, cause: error
       end
@@ -70,6 +81,14 @@ module SolidRespRactor
 
       def blocking_read
         @io.read(@chunk_size)
+      end
+
+      def wait(io, event, timeout)
+        return @selector.wait(io, event, timeout) if @selector.respond_to?(:wait)
+
+        readers = event == :read ? [io] : nil
+        writers = event == :write ? [io] : nil
+        @selector.call(readers, writers, timeout)
       end
 
       def raise_timeout(timeout)

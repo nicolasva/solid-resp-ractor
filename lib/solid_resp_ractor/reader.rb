@@ -61,7 +61,7 @@ module SolidRespRactor
       if @read_depth > @limits.max_nesting_depth
         raise ProtocolError, "RESP nesting exceeds #{@limits.max_nesting_depth}"
       end
-      value = read_type(read_bytes(1))
+      value = read_type(read_byte)
       raise @captured_error if top_level && exception && @captured_error
 
       value
@@ -75,22 +75,22 @@ module SolidRespRactor
 
     def read_type(type)
       case type
-      when "+" then handle(:simple_string, read_line)
-      when "-" then error_response(read_line, blob: false)
-      when ":" then handle(:integer, parse_integer(read_line))
-      when "$" then read_blob
-      when "*" then read_array
-      when "_" then read_null
-      when "#" then read_boolean
-      when "," then handle(:double, parse_float(read_line))
-      when "(" then handle(:big_number, parse_integer(read_line))
-      when "%" then read_map
-      when "~" then read_collection(:set)
-      when ">" then read_collection(:push)
-      when "=" then read_verbatim
-      when "!" then error_response(read_sized_string(streamed: true), blob: true)
-      when "|" then read_attribute
-      else raise ProtocolError, "Unknown RESP type byte: #{type.inspect}"
+      when 43 then handle(:simple_string, read_line)
+      when 45 then error_response(read_line, blob: false)
+      when 58 then handle(:integer, parse_integer(read_line))
+      when 36 then read_blob
+      when 42 then read_array
+      when 95 then read_null
+      when 35 then read_boolean
+      when 44 then handle(:double, parse_float(read_line))
+      when 40 then handle(:big_number, parse_integer(read_line))
+      when 37 then read_map
+      when 126 then read_collection(:set)
+      when 62 then read_collection(:push)
+      when 61 then read_verbatim
+      when 33 then error_response(read_sized_string(streamed: true), blob: true)
+      when 124 then read_attribute
+      else raise ProtocolError, "Unknown RESP type byte: #{type.chr.inspect}"
       end
     end
 
@@ -143,7 +143,7 @@ module SolidRespRactor
     def read_streamed_collection
       values = []
       loop do
-        type = read_bytes(1)
+        type = read_byte
         break if aggregate_end?(type)
 
         values << read_type(type)
@@ -156,7 +156,7 @@ module SolidRespRactor
       {}.tap do |result|
         count = 0
         loop do
-          type = read_bytes(1)
+          type = read_byte
           break if aggregate_end?(type)
 
           key = read_type(type)
@@ -168,7 +168,7 @@ module SolidRespRactor
     end
 
     def aggregate_end?(type)
-      return false unless type == "."
+      return false unless type == 46
 
       value = read_line
       raise ProtocolError, "RESP aggregate terminator must not contain data" unless value.empty?
@@ -215,8 +215,10 @@ module SolidRespRactor
     def read_chunked_string
       buffer = +""
       loop do
-        type = read_bytes(1)
-        raise ProtocolError, "Expected RESP chunk, got #{type.inspect}" unless type == ";"
+        type = read_byte
+        unless type == 59
+          raise ProtocolError, "Expected RESP chunk, got #{type.chr.inspect}"
+        end
 
         length = read_length
         break if length.zero?
@@ -229,9 +231,7 @@ module SolidRespRactor
 
     def read_sized_value(length)
       value = read_bytes(length)
-      actual = read_bytes(2)
-      raise ProtocolError, "Expected CRLF, got #{actual.inspect}" unless actual == CRLF
-
+      read_crlf
       value
     end
 
@@ -287,6 +287,26 @@ module SolidRespRactor
       @offset += length
       clear_consumed_buffer
       value
+    end
+
+    def read_byte
+      fill_buffer while available_bytes < 1
+      value = @buffer.getbyte(@offset)
+      @offset += 1
+      clear_consumed_buffer
+      value
+    end
+
+    def read_crlf
+      fill_buffer while available_bytes < 2
+      unless @buffer.getbyte(@offset) == 13 &&
+          @buffer.getbyte(@offset + 1) == 10
+        actual = @buffer.byteslice(@offset, 2)
+        raise ProtocolError, "Expected CRLF, got #{actual.inspect}"
+      end
+
+      @offset += 2
+      clear_consumed_buffer
     end
 
     def fill_buffer

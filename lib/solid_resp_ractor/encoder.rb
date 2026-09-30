@@ -20,6 +20,12 @@ module SolidRespRactor
 
   class Encoder
     CRLF = "\r\n"
+    BULK_HEADERS = Ractor.make_shareable(
+      Array.new(1_025) { |length| "$#{length}#{CRLF}".freeze },
+    )
+    ARRAY_HEADERS = Ractor.make_shareable(
+      Array.new(129) { |length| "*#{length}#{CRLF}".freeze },
+    )
 
     attr_reader :argument_encoder
 
@@ -30,6 +36,10 @@ module SolidRespRactor
     end
 
     def encode(command)
+      unless @expand_arrays && command.any? { |argument| argument.is_a?(Array) }
+        return encode_flat(command)
+      end
+
       length = command.sum { |argument| expanded?(argument) ? argument.length : 1 }
       raise ArgumentError, "RESP command cannot be empty" if length.zero?
 
@@ -44,6 +54,19 @@ module SolidRespRactor
 
     private
 
+    def encode_flat(command)
+      length = command.length
+      raise ArgumentError, "RESP command cannot be empty" if length.zero?
+
+      command.each_with_object(+array_header(length)) do |argument, buffer|
+        append_argument(buffer, argument)
+      end
+    end
+
+    def array_header(length)
+      ARRAY_HEADERS[length] || "*#{length}#{CRLF}"
+    end
+
     def expanded?(argument)
       @expand_arrays && argument.is_a?(Array)
     end
@@ -54,7 +77,11 @@ module SolidRespRactor
         raise TypeError, "argument encoder must return a String, got #{value.class}"
       end
 
-      buffer << "$#{value.bytesize}#{CRLF}#{value}#{CRLF}"
+      buffer << bulk_header(value.bytesize) << value << CRLF
+    end
+
+    def bulk_header(length)
+      BULK_HEADERS[length] || "$#{length}#{CRLF}"
     end
   end
 
