@@ -272,6 +272,12 @@ after at least 16 KiB have been consumed and that prefix occupies at least half
 of the buffer. This avoids copying a large unread suffix after small fragmented
 reads while still releasing consumed data during long-lived streams.
 
+## Reader benchmark
+
+Encoding, Reader-only, TCP, allocation, and Ractor-scaling benchmarks live in
+the separate `benchmark_solid_resp_ractor` sibling bundle so benchmark tooling
+and generated reports remain outside the gem.
+
 ## Development
 
 ```sh
