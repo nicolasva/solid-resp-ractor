@@ -278,6 +278,68 @@ Encoding, Reader-only, TCP, allocation, and Ractor-scaling benchmarks live in
 the separate `benchmark_solid_resp_ractor` sibling bundle so benchmark tooling
 and generated reports remain outside the gem.
 
+### Current baseline
+
+**Environment:** Ruby 4.0.1 (arm64-darwin25); solid-resp-ractor 0.1.3;
+Redis 8.10.0. Values are medians of three runs with one second of warmup and
+three seconds of measurement per row. Pipeline metrics are amortized per
+command.
+
+| Ractors | Layer | Operation | ops/s | Scaling efficiency | alloc/op | bytes/op |
+|---:|---|---|---:|---:|---:|---:|
+| 1 | Encode | GET | 1,261,840 | 100.0% | 2.0 | 104.8 |
+| 2 | Encode | GET | 2,298,471 | 91.1% | 2.0 | 104.8 |
+| 4 | Encode | GET | 3,898,679 | 77.2% | 2.0 | 104.8 |
+| 8 | Encode | GET | 5,234,281 | 51.9% | 2.0 | 104.8 |
+| 1 | Encode | SET | 974,781 | 100.0% | 2.0 | 104.8 |
+| 2 | Encode | SET | 1,797,823 | 92.2% | 2.0 | 104.8 |
+| 4 | Encode | SET | 3,249,650 | 83.3% | 2.0 | 104.8 |
+| 8 | Encode | SET | 4,470,244 | 57.3% | 2.0 | 104.8 |
+| 1 | Encode | pipeline 50 | 1,345,762 | 100.0% | 2.0 | 145.8 |
+| 2 | Encode | pipeline 50 | 2,482,408 | 92.2% | 2.0 | 145.8 |
+| 4 | Encode | pipeline 50 | 4,250,421 | 79.0% | 2.0 | 145.8 |
+| 8 | Encode | pipeline 50 | 5,779,732 | 53.7% | 2.0 | 145.8 |
+| 1 | Reader | +OK | 1,690,247 | 100.0% | 2.0 | 40.8 |
+| 2 | Reader | +OK | 3,197,883 | 94.6% | 2.0 | 40.8 |
+| 4 | Reader | +OK | 5,788,420 | 85.6% | 2.0 | 40.8 |
+| 8 | Reader | +OK | 8,029,110 | 59.4% | 2.0 | 40.8 |
+| 1 | Reader | integer | 1,562,655 | 100.0% | 2.0 | 40.8 |
+| 2 | Reader | integer | 2,968,526 | 95.0% | 2.0 | 40.8 |
+| 4 | Reader | integer | 5,459,562 | 87.3% | 2.0 | 40.8 |
+| 8 | Reader | integer | 7,423,102 | 59.4% | 2.0 | 40.8 |
+| 1 | Reader | bulk 16 B | 787,426 | 100.0% | 3.0 | 120.8 |
+| 2 | Reader | bulk 16 B | 1,533,310 | 97.4% | 3.0 | 120.8 |
+| 4 | Reader | bulk 16 B | 2,796,102 | 88.8% | 3.0 | 120.8 |
+| 8 | Reader | bulk 16 B | 4,090,043 | 64.9% | 3.0 | 120.8 |
+| 1 | Reader | bulk 1 KiB | 709,062 | 100.0% | 3.0 | 1,105.8 |
+| 2 | Reader | bulk 1 KiB | 1,225,199 | 86.4% | 3.0 | 1,105.8 |
+| 4 | Reader | bulk 1 KiB | 2,055,006 | 72.5% | 3.0 | 1,105.8 |
+| 8 | Reader | bulk 1 KiB | 2,597,586 | 45.8% | 3.0 | 1,105.8 |
+| 1 | Reader | array 50 | 32,877 | 100.0% | 103.0 | 2,680.8 |
+| 2 | Reader | array 50 | 60,955 | 92.7% | 103.0 | 2,680.8 |
+| 4 | Reader | array 50 | 115,104 | 87.5% | 103.0 | 2,680.8 |
+| 8 | Reader | array 50 | 185,791 | 70.6% | 103.0 | 2,680.8 |
+| 1 | Reader | nested RESP3 | 87,279 | 100.0% | 34.0 | 1,080.9 |
+| 2 | Reader | nested RESP3 | 166,456 | 95.4% | 34.0 | 1,080.9 |
+| 4 | Reader | nested RESP3 | 302,211 | 86.6% | 34.0 | 1,080.9 |
+| 8 | Reader | nested RESP3 | 433,100 | 62.0% | 34.0 | 1,080.9 |
+| 1 | Reader + TCP | GET | 40,447 | 100.0% | 6.0 | 16,609.8 |
+| 2 | Reader + TCP | GET | 62,692 | 77.5% | 6.0 | 16,609.8 |
+| 4 | Reader + TCP | GET | 83,028 | 51.3% | 6.0 | 16,609.8 |
+| 8 | Reader + TCP | GET | 94,345 | 29.2% | 6.0 | 16,609.8 |
+| 1 | Reader + TCP | pipeline 50 | 472,549 | 100.0% | 3.1 | 472.3 |
+| 2 | Reader + TCP | pipeline 50 | 867,085 | 91.7% | 3.1 | 472.3 |
+| 4 | Reader + TCP | pipeline 50 | 1,372,618 | 72.6% | 3.1 | 472.3 |
+| 8 | Reader + TCP | pipeline 50 | 1,999,445 | 52.9% | 3.1 | 472.3 |
+
+Pure bulk decoding represents roughly 5.1% of the service time of a
+non-pipelined loopback GET, but about 60% of an amortized pipeline command.
+These are directional ratios rather than profiler attribution. The primary
+finding is the TCP GET's 16.2 KiB/op allocation: `read_nonblock` creates a
+chunk-sized String for a small response, while the equivalent Reader-only
+frame uses 120.8 bytes/op. Socket-to-buffer allocation should therefore be
+investigated before adding parser fast paths.
+
 ## Development
 
 ```sh
