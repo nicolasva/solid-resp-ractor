@@ -335,22 +335,25 @@ the scaling rows; Redis allocations are excluded.
 | 2 | Reader | nested RESP3 | 166,456 | 95.4% | 34.0 | 1,080.9 |
 | 4 | Reader | nested RESP3 | 302,211 | 86.6% | 34.0 | 1,080.9 |
 | 8 | Reader | nested RESP3 | 433,100 | 62.0% | 34.0 | 1,080.9 |
-| 1 | Reader + TCP | GET | 40,447 | 100.0% | 6.0 | 16,609.8 |
-| 2 | Reader + TCP | GET | 62,692 | 77.5% | 6.0 | 16,609.8 |
-| 4 | Reader + TCP | GET | 83,028 | 51.3% | 6.0 | 16,609.8 |
-| 8 | Reader + TCP | GET | 94,345 | 29.2% | 6.0 | 16,609.8 |
-| 1 | Reader + TCP | pipeline 50 | 472,549 | 100.0% | 3.1 | 472.3 |
-| 2 | Reader + TCP | pipeline 50 | 867,085 | 91.7% | 3.1 | 472.3 |
-| 4 | Reader + TCP | pipeline 50 | 1,372,618 | 72.6% | 3.1 | 472.3 |
-| 8 | Reader + TCP | pipeline 50 | 1,999,445 | 52.9% | 3.1 | 472.3 |
+| 1 | Reader + TCP | GET | 40,173 | 100.0% | 4.0 | 120.8 |
+| 2 | Reader + TCP | GET | 66,235 | 82.4% | 4.0 | 120.8 |
+| 4 | Reader + TCP | GET | 89,146 | 55.5% | 4.0 | 120.8 |
+| 8 | Reader + TCP | GET | 102,060 | 31.8% | 4.0 | 120.8 |
+| 1 | Reader + TCP | pipeline 50 | 473,123 | 100.0% | 3.0 | 120.0 |
+| 2 | Reader + TCP | pipeline 50 | 878,582 | 92.8% | 3.0 | 120.0 |
+| 4 | Reader + TCP | pipeline 50 | 1,478,781 | 78.1% | 3.0 | 120.0 |
+| 8 | Reader + TCP | pipeline 50 | 2,044,122 | 54.0% | 3.0 | 120.0 |
 
 Pure bulk decoding represents roughly 5.1% of the service time of a
 non-pipelined loopback GET, but about 60% of an amortized pipeline command.
-These are directional ratios rather than profiler attribution. The primary
-finding is the TCP GET's 16.2 KiB/op allocation: `read_nonblock` creates a
-chunk-sized String for a small response, while the equivalent Reader-only
-frame uses 120.8 bytes/op. Socket-to-buffer allocation should therefore be
-investigated before adding parser fast paths.
+These are directional ratios rather than profiler attribution.
+
+Reusing the destination String passed to `read_nonblock` reduced GET
+allocation from 16,609.8 to 120.8 bytes/op (-99.27%) and from 6.0 to 4.0
+objects/op. GET throughput changed by -0.68% at 1R and improved by 8.18% at
+8R. Pipeline allocation fell from 472.3 to 120.0 bytes/op (-74.59%), while
+throughput improved by 2.23% at 8R. The allocation improvement is structural
+and does not require changing Reader parser invariants.
 
 ## Development
 

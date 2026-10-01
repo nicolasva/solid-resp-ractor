@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.4] - 2026-10-01
+
+### Changed
+
+- Reuse a destination String for non-blocking IO reads instead of allocating a
+  chunk-sized String for every socket response.
+- Reduce loopback GET allocation from 16,609.8 to 120.8 bytes per operation
+  and from 6.0 to 4.0 objects per operation in the Ruby 4.0.1 benchmark.
+- Improve loopback GET throughput by 8.18% at eight Ractors while preserving
+  Reader parser-buffer invariants.
+
 ## [0.1.3] - 2026-09-30
 
 ### Changed
@@ -50,6 +61,7 @@ All notable changes to this project are documented in this file.
   input, and parallel Ractors.
 - Ractor-shareable default encoder with no global mutable state.
 
+[0.1.4]: https://github.com/nicolasva/solid-resp-ractor/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/nicolasva/solid-resp-ractor/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/nicolasva/solid-resp-ractor/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/nicolasva/solid-resp-ractor/compare/v0.1.0...v0.1.1

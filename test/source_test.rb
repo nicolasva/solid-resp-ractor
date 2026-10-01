@@ -41,15 +41,31 @@ class SourceTest < Minitest::Test
     assert_equal "+OK\r\n", source.read(timeout: 0.1)
   end
 
+  def test_reuses_the_nonblocking_read_buffer
+    io = WaitingIO.new("+first\r\n", "+second\r\n")
+    source = SolidRespRactor::Sources::IO.new(io)
+
+    first = source.read(timeout: 0.1)
+    first_id = first.object_id
+    assert_equal "+first\r\n", first
+
+    second = source.read(timeout: 0.1)
+    assert_equal "+second\r\n", second
+    assert_equal first_id, second.object_id
+  end
+
   class WaitingIO
     def initialize(*responses)
       @responses = responses.empty? ? [:wait_readable] : responses
     end
 
-    def read_nonblock(_length, exception:)
+    def read_nonblock(_length, buffer, exception:)
       raise ArgumentError unless exception == false
 
-      @responses.length == 1 ? @responses.first : @responses.shift
+      response = @responses.length == 1 ? @responses.first : @responses.shift
+      return response if response == :wait_readable || response == :wait_writable
+
+      buffer.replace(response)
     end
   end
 end

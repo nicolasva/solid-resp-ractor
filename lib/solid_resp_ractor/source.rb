@@ -47,6 +47,7 @@ module SolidRespRactor
 
         @selector = selector
         @clock = clock
+        @read_buffer = +""
       end
 
       def read(timeout:)
@@ -54,7 +55,11 @@ module SolidRespRactor
 
         deadline = nil
         loop do
-          chunk = @io.read_nonblock(@chunk_size, exception: false)
+          chunk = @io.read_nonblock(
+            @chunk_size,
+            @read_buffer,
+            exception: false,
+          )
           return chunk unless chunk == :wait_readable || chunk == :wait_writable
 
           deadline ||= @clock.now + timeout if timeout
