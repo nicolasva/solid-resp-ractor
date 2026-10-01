@@ -278,12 +278,24 @@ Encoding, Reader-only, TCP, allocation, and Ractor-scaling benchmarks live in
 the separate `benchmark_solid_resp_ractor` sibling bundle so benchmark tooling
 and generated reports remain outside the gem.
 
+Run the complete matrix from the sibling checkout:
+
+```sh
+cd ../benchmark_solid_resp_ractor
+RBENV_VERSION=4.0.1 \
+BENCHMARK_OUTPUT=results/ruby-4.0.1-reader.md \
+bundle exec rake
+```
+
 ### Current baseline
 
 **Environment:** Ruby 4.0.1 (arm64-darwin25); solid-resp-ractor 0.1.3;
 Redis 8.10.0. Values are medians of three runs with one second of warmup and
 three seconds of measurement per row. Pipeline metrics are amortized per
-command.
+command. Reader-only rows consume an in-memory repeating 16 KiB source.
+Reader + TCP rows use an isolated loopback Redis server. Allocation metrics
+are measured separately in one Ractor with GC disabled, then repeated across
+the scaling rows; Redis allocations are excluded.
 
 | Ractors | Layer | Operation | ops/s | Scaling efficiency | alloc/op | bytes/op |
 |---:|---|---|---:|---:|---:|---:|
