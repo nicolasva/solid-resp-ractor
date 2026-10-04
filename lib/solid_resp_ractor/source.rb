@@ -48,28 +48,18 @@ module SolidRespRactor
         @selector = selector
         @clock = clock
         @read_buffer = +""
+        @nonblocking = io.respond_to?(:read_nonblock)
+        @selector_waits = selector.respond_to?(:wait)
+        @selectable = nil
       end
 
       def read(timeout:)
-        return blocking_read unless @io.respond_to?(:read_nonblock)
+        return blocking_read unless @nonblocking
 
-        deadline = nil
-        loop do
-          chunk = @io.read_nonblock(
-            @chunk_size,
-            @read_buffer,
-            exception: false,
-          )
-          return chunk unless chunk == :wait_readable || chunk == :wait_writable
+        chunk = @io.read_nonblock(@chunk_size, @read_buffer, exception: false)
+        return chunk unless chunk == :wait_readable || chunk == :wait_writable
 
-          deadline ||= @clock.now + timeout if timeout
-          remaining = deadline && deadline - @clock.now
-          raise_timeout(timeout) if remaining && remaining <= 0
-
-          selectable = @io.respond_to?(:to_io) ? @io.to_io : @io
-          event = chunk == :wait_readable ? :read : :write
-          raise_timeout(timeout) unless wait(selectable, event, remaining)
-        end
+        wait_for_chunk(chunk, timeout)
       rescue IOError, SystemCallError => error
         raise ConnectionError, error.message, cause: error
       end
@@ -84,12 +74,29 @@ module SolidRespRactor
 
       private
 
+      def wait_for_chunk(chunk, timeout)
+        selectable = (@selectable ||= @io.respond_to?(:to_io) ? @io.to_io : @io)
+        deadline = timeout && @clock.now + timeout
+        remaining = timeout
+        loop do
+          raise_timeout(timeout) if remaining && remaining <= 0
+
+          event = chunk == :wait_readable ? :read : :write
+          raise_timeout(timeout) unless wait(selectable, event, remaining)
+
+          chunk = @io.read_nonblock(@chunk_size, @read_buffer, exception: false)
+          return chunk unless chunk == :wait_readable || chunk == :wait_writable
+
+          remaining = deadline && deadline - @clock.now
+        end
+      end
+
       def blocking_read
         @io.read(@chunk_size)
       end
 
       def wait(io, event, timeout)
-        return @selector.wait(io, event, timeout) if @selector.respond_to?(:wait)
+        return @selector.wait(io, event, timeout) if @selector_waits
 
         readers = event == :read ? [io] : nil
         writers = event == :write ? [io] : nil

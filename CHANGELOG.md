@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Parse RESP integers and lengths in place from the read buffer, without
+  allocating a temporary line String. Non-decimal forms still fall back to
+  `Kernel#Integer` semantics.
+- Read nested values through an internal depth-tracked path instead of the
+  public `#read`, removing per-element `ensure` bookkeeping and subclass
+  wrappers from aggregate parsing.
+- Skip handler dispatch for scalars and plain aggregates when the built-in
+  `Compatible` or `Typed` handlers are used.
+- Clear the consumed read buffer once per reply instead of after every token.
+- Encode flat commands in a single loop with inline String and small Integer
+  fast paths for the default argument encoder.
+- Cache non-blocking IO capabilities and take only one clock reading per
+  readiness wait.
+- Ruby 4.0.1 microbenchmarks: flat command encoding +72% to +85%, bulk reply
+  parsing +51%, 10-element arrays +68% with 33 → 11 allocations, and
+  50-reply pipelines +46% with 125 → 75 allocations.
+
+### Fixed
+
+- Locate CRLF terminators by byte offset (`String#byteindex`, Ruby 3.2+) so
+  custom sources returning multibyte UTF-8 chunks are parsed correctly.
+
 ## [0.1.4] - 2026-10-01
 
 ### Changed

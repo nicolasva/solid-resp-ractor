@@ -4,6 +4,7 @@ module SolidRespRactor
   class Reader
     CRLF = "\r\n"
     COMPACT_THRESHOLD = 16 * 1024
+    PASSTHROUGH_HANDLERS = Ractor.make_shareable([Handlers::Compatible, Handlers::Typed])
 
     attr_reader :source
 
@@ -31,11 +32,15 @@ module SolidRespRactor
       )
       @read_timeout = read_timeout
       @handler = handler
+      # Built-in handlers return scalars and plain aggregates unchanged, so
+      # the hot path can skip the dispatch for those types.
+      @passthrough = PASSTHROUGH_HANDLERS.include?(handler)
       @error_mapper = error_mapper
       @limits = limits
+      @max_line_size = limits.max_line_size
+      @max_nesting_depth = limits.max_nesting_depth
       @buffer = +""
       @offset = 0
-      @read_depth = 0
       @captured_error = nil
     end
 
@@ -55,116 +60,139 @@ module SolidRespRactor
     end
 
     def read(exception: true)
-      top_level = @read_depth.zero?
-      @captured_error = nil if top_level
-      @read_depth += 1
-      if @read_depth > @limits.max_nesting_depth
-        raise ProtocolError, "RESP nesting exceeds #{@limits.max_nesting_depth}"
-      end
-      value = read_type(read_byte)
-      raise @captured_error if top_level && exception && @captured_error
+      @captured_error = nil
+      value = read_value(1)
+      clear_consumed_buffer
+      raise @captured_error if exception && @captured_error
 
       value
     rescue EOFError
       raise ConnectionError, "RESP stream closed"
-    ensure
-      @read_depth -= 1
     end
 
     private
 
-    def read_type(type)
+    def read_value(depth)
+      if depth > @max_nesting_depth
+        raise ProtocolError, "RESP nesting exceeds #{@max_nesting_depth}"
+      end
+
+      fill_buffer if @offset >= @buffer.bytesize
+      type = @buffer.getbyte(@offset)
+      @offset += 1
+      read_type(type, depth)
+    end
+
+    def read_type(type, depth)
       case type
-      when 43 then handle(:simple_string, read_line)
-      when 45 then error_response(read_line, blob: false)
-      when 58 then handle(:integer, parse_integer(read_line))
       when 36 then read_blob
-      when 42 then read_array
+      when 43
+        value = read_line
+        @passthrough ? value : handle(:simple_string, value)
+      when 58
+        value = read_integer
+        @passthrough ? value : handle(:integer, value)
+      when 42 then read_array(depth)
+      when 45 then error_response(read_line, blob: false)
       when 95 then read_null
       when 35 then read_boolean
       when 44 then handle(:double, parse_float(read_line))
-      when 40 then handle(:big_number, parse_integer(read_line))
-      when 37 then read_map
-      when 126 then read_collection(:set)
-      when 62 then read_collection(:push)
+      when 40 then handle(:big_number, read_integer)
+      when 37 then read_map(depth)
+      when 126 then read_collection(:set, depth)
+      when 62 then read_collection(:push, depth)
       when 61 then read_verbatim
-      when 33 then error_response(read_sized_string(streamed: true), blob: true)
-      when 124 then read_attribute
+      when 33 then error_response(read_sized_string(true), blob: true)
+      when 124 then read_attribute(depth)
       else raise ProtocolError, "Unknown RESP type byte: #{type.chr.inspect}"
       end
     end
 
     def read_blob
-      length = read_length(nullable: true, streamed: true)
-      return handle(:blob_string, nil) unless length
-
-      validate_blob_length(length) unless length == :streamed
-      value = length == :streamed ? read_chunked_string : read_sized_value(length)
-      handle(:blob_string, value)
-    end
-
-    def read_array
-      length = read_length(nullable: true, streamed: true)
-      return handle(:array, nil) unless length
-
-      validate_collection_length(length) unless length == :streamed
-      value = if length == :streamed
-        read_streamed_collection
+      length = read_length(true, true)
+      if length.nil?
+        value = nil
+      elsif length == :streamed
+        value = read_chunked_string
       else
-        Array.new(length) { read(exception: false) }
+        validate_blob_length(length)
+        value = read_sized_value(length)
       end
-      handle(:array, value)
+      @passthrough ? value : handle(:blob_string, value)
     end
 
-    def read_collection(type)
-      length = read_length(streamed: true)
-      validate_collection_length(length) unless length == :streamed
-      value = if length == :streamed
-        read_streamed_collection
+    def read_array(depth)
+      length = read_length(true, true)
+      if length.nil?
+        value = nil
+      elsif length == :streamed
+        value = read_streamed_collection(depth)
       else
-        Array.new(length) { read(exception: false) }
+        validate_collection_length(length)
+        value = read_elements(length, depth + 1)
+      end
+      @passthrough ? value : handle(:array, value)
+    end
+
+    def read_elements(length, depth)
+      values = Array.new(length)
+      index = 0
+      while index < length
+        values[index] = read_value(depth)
+        index += 1
+      end
+      values
+    end
+
+    def read_collection(type, depth)
+      length = read_length(false, true)
+      value = if length == :streamed
+        read_streamed_collection(depth)
+      else
+        validate_collection_length(length)
+        read_elements(length, depth + 1)
       end
       handle(type, value)
     end
 
-    def read_map
-      length = read_length(streamed: true)
-      validate_collection_length(length) unless length == :streamed
+    def read_map(depth)
+      length = read_length(false, true)
       value = if length == :streamed
-        read_streamed_map
+        read_streamed_map(depth)
       else
-        {}.tap do |result|
-          length.times { result[read(exception: false)] = read(exception: false) }
-        end
+        validate_collection_length(length)
+        result = {}
+        length.times { result[read_value(depth + 1)] = read_value(depth + 1) }
+        result
       end
       handle(:map, value)
     end
 
-    def read_streamed_collection
+    def read_streamed_collection(depth)
       values = []
       loop do
         type = read_byte
         break if aggregate_end?(type)
 
-        values << read_type(type)
+        values << read_type(type, depth)
         validate_collection_length(values.length)
       end
       values
     end
 
-    def read_streamed_map
-      {}.tap do |result|
-        count = 0
-        loop do
-          type = read_byte
-          break if aggregate_end?(type)
+    def read_streamed_map(depth)
+      result = {}
+      count = 0
+      loop do
+        type = read_byte
+        break if aggregate_end?(type)
 
-          key = read_type(type)
-          result[key] = read(exception: false)
-          count += 1
-          validate_collection_length(count)
-        end
+        key = read_type(type, depth)
+        result[key] = read_value(depth + 1)
+        count += 1
+        validate_collection_length(count)
       end
+      result
     end
 
     def aggregate_end?(type)
@@ -176,9 +204,9 @@ module SolidRespRactor
       true
     end
 
-    def read_attribute
-      attributes = read_map
-      value = read(exception: false)
+    def read_attribute(depth)
+      attributes = read_map(depth)
+      value = read_value(depth + 1)
       handle(:attribute, [attributes, value])
     end
 
@@ -186,7 +214,7 @@ module SolidRespRactor
       value = read_line
       raise ProtocolError, "RESP null must not contain data" unless value.empty?
 
-      handle(:null, nil)
+      @passthrough ? nil : handle(:null, nil)
     end
 
     def read_boolean
@@ -198,7 +226,7 @@ module SolidRespRactor
     end
 
     def read_verbatim
-      value = read_sized_string(streamed: true)
+      value = read_sized_string(true)
       unless value.bytesize >= 4 && value.byteslice(3, 1) == ":"
         raise ProtocolError, "Invalid RESP verbatim string"
       end
@@ -206,10 +234,12 @@ module SolidRespRactor
       handle(:verbatim, [value.byteslice(0, 3).freeze, value.byteslice(4..)])
     end
 
-    def read_sized_string(streamed: false)
-      length = read_length(streamed: streamed)
-      validate_blob_length(length) unless length == :streamed
-      length == :streamed ? read_chunked_string : read_sized_value(length)
+    def read_sized_string(streamed = false)
+      length = read_length(false, streamed)
+      return read_chunked_string if length == :streamed
+
+      validate_blob_length(length)
+      read_sized_value(length)
     end
 
     def read_chunked_string
@@ -230,20 +260,63 @@ module SolidRespRactor
     end
 
     def read_sized_value(length)
+      offset = @offset
+      buffer = @buffer
+      if buffer.bytesize - offset >= length + 2 &&
+          buffer.getbyte(offset + length) == 13 &&
+          buffer.getbyte(offset + length + 1) == 10
+        @offset = offset + length + 2
+        return buffer.byteslice(offset, length)
+      end
+
       value = read_bytes(length)
       read_crlf
       value
     end
 
-    def read_length(nullable: false, streamed: false)
-      value = read_line
-      return :streamed if streamed && value == "?"
+    def read_length(nullable = false, streamed = false)
+      length = scan_integer
+      unless length
+        value = read_line
+        return :streamed if streamed && value == "?"
 
-      length = parse_integer(value)
+        length = parse_integer(value)
+      end
       return if nullable && length == -1
       raise ProtocolError, "Invalid RESP length: #{length}" if length.negative?
 
       length
+    end
+
+    def read_integer
+      scan_integer || parse_integer(read_line)
+    end
+
+    # Parses a plain decimal line in place, without allocating the line.
+    # Returns nil whenever the line is incomplete or not a plain decimal so
+    # the caller falls back to the exact Kernel#Integer semantics.
+    def scan_integer
+      buffer = @buffer
+      offset = @offset
+      index = find_crlf(buffer, offset)
+      return unless index && index - offset <= @max_line_size
+
+      position = offset
+      negative = buffer.getbyte(position) == 45
+      position += 1 if negative
+      return if position >= index
+      return if buffer.getbyte(position) == 48 && position + 1 < index
+
+      value = 0
+      while position < index
+        byte = buffer.getbyte(position)
+        return unless byte >= 48 && byte <= 57
+
+        value = (value * 10) + (byte - 48)
+        position += 1
+      end
+      @offset = index + 2
+      negative ? -value : value
     end
 
     def parse_integer(value)
@@ -264,20 +337,29 @@ module SolidRespRactor
 
     def read_line
       loop do
-        if (index = @buffer.index(CRLF, @offset))
-          line_length = index - @offset
-          if line_length > @limits.max_line_size
-            raise ProtocolError, "RESP line exceeds #{@limits.max_line_size} bytes"
+        offset = @offset
+        if (index = find_crlf(@buffer, offset))
+          line_length = index - offset
+          if line_length > @max_line_size
+            raise ProtocolError, "RESP line exceeds #{@max_line_size} bytes"
           end
-          value = @buffer.byteslice(@offset, line_length)
           @offset = index + 2
-          clear_consumed_buffer
-          return value
+          return @buffer.byteslice(offset, line_length)
         end
-        if available_bytes > @limits.max_line_size
-          raise ProtocolError, "RESP line exceeds #{@limits.max_line_size} bytes"
+        if available_bytes > @max_line_size
+          raise ProtocolError, "RESP line exceeds #{@max_line_size} bytes"
         end
         fill_buffer
+      end
+    end
+
+    if "".respond_to?(:byteindex)
+      def find_crlf(buffer, offset)
+        buffer.byteindex(CRLF, offset)
+      end
+    else
+      def find_crlf(buffer, offset)
+        buffer.index(CRLF, offset)
       end
     end
 
@@ -285,15 +367,13 @@ module SolidRespRactor
       fill_buffer while available_bytes < length
       value = @buffer.byteslice(@offset, length)
       @offset += length
-      clear_consumed_buffer
       value
     end
 
     def read_byte
-      fill_buffer while available_bytes < 1
+      fill_buffer if @offset >= @buffer.bytesize
       value = @buffer.getbyte(@offset)
       @offset += 1
-      clear_consumed_buffer
       value
     end
 
@@ -306,11 +386,14 @@ module SolidRespRactor
       end
 
       @offset += 2
-      clear_consumed_buffer
     end
 
     def fill_buffer
-      compact_buffer
+      if @offset == @buffer.bytesize
+        clear_consumed_buffer
+      else
+        compact_buffer
+      end
       chunk = @source.read(timeout: @read_timeout)
       raise EOFError if chunk.nil?
       unless chunk.is_a?(String)

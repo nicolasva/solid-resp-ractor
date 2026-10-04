@@ -47,6 +47,35 @@ class EncoderTest < Minitest::Test
     assert_raises(TypeError) { encoder.encode(["PING"]) }
   end
 
+  def test_encodes_cached_and_uncached_integer_arguments
+    assert_equal(
+      "*5\r\n$6\r\nEXPIRE\r\n$1\r\n0\r\n$4\r\n1023\r\n$4\r\n1024\r\n$2\r\n-1\r\n",
+      SolidRespRactor.encode(["EXPIRE", 0, 1_023, 1_024, -1]),
+    )
+  end
+
+  def test_expands_arrays_found_after_flat_arguments
+    assert_equal(
+      "*4\r\n$4\r\nMSET\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n",
+      SolidRespRactor.encode(["MSET", "a", [1, :b]]),
+    )
+    assert_raises(ArgumentError) { SolidRespRactor.encode([[]]) }
+  end
+
+  def test_custom_argument_encoder_also_receives_strings
+    encoder = SolidRespRactor::Encoder.new(argument_encoder: ->(value) { "#{value}!" })
+
+    assert_equal "*2\r\n$4\r\nGET!\r\n$2\r\n1!\r\n", encoder.encode(["GET", 1])
+  end
+
+  def test_returns_a_new_mutable_buffer_for_every_command
+    first = SolidRespRactor.encode(["PING"])
+    second = SolidRespRactor.encode(["PING"])
+
+    refute_same first, second
+    refute first.frozen?
+  end
+
   def test_default_encoder_is_ractor_shareable
     assert Ractor.shareable?(SolidRespRactor::DEFAULT_ENCODER)
 

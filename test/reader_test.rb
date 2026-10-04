@@ -153,6 +153,47 @@ class ReaderTest < Minitest::Test
     end
   end
 
+  def test_parses_integers_and_lengths_split_across_chunks
+    payload = ":-12345\r\n:99999999999999999999999\r\n*2\r\n$11\r\nhello world\r\n:0\r\n$-1\r\n*-1\r\n"
+    expected = [-12_345, 99_999_999_999_999_999_999_999, ["hello world", 0], nil, nil]
+
+    payload.bytesize.times do |split|
+      source = ChunkSource.new([payload.byteslice(0, split), payload.byteslice(split..)].reject(&:empty?))
+      reader = SolidRespRactor::Reader.new(source: source)
+
+      assert_equal expected, Array.new(expected.length) { reader.read }, "split at #{split}"
+    end
+  end
+
+  def test_non_plain_integers_keep_kernel_integer_semantics
+    reader = reader_for(":+5\r\n:1_000\r\n$+3\r\nabc\r\n")
+
+    assert_equal 5, reader.read
+    assert_equal 1_000, reader.read
+    assert_equal "abc", reader.read
+    assert_raises(SolidRespRactor::ProtocolError) { reader_for(":-\r\n").read }
+    assert_raises(SolidRespRactor::ProtocolError) { reader_for(":12a\r\n").read }
+    assert_raises(SolidRespRactor::ProtocolError) { reader_for("$-2\r\n").read }
+  end
+
+  def test_integer_lines_respect_the_line_limit
+    limits = SolidRespRactor::Limits.new(max_line_size: 3)
+
+    assert_equal 123, reader_for(":123\r\n", limits: limits).read
+    assert_raises(SolidRespRactor::ProtocolError) do
+      reader_for(":1234\r\n", limits: limits).read
+    end
+  end
+
+  def test_finds_line_ends_by_byte_offset_in_multibyte_chunks
+    skip "String#byteindex requires Ruby 3.2" unless "".respond_to?(:byteindex)
+
+    reader = SolidRespRactor::Reader.new(source: ChunkSource.new(["+\u00e9t\u00e9\r\n:7\r\n"]))
+
+    assert_equal "\u00e9t\u00e9".b, reader.read.b
+    assert_equal 7, reader.read
+  end
+
   def test_reports_end_of_stream_as_connection_error
     assert_raises(SolidRespRactor::ConnectionError) { reader_for("").read }
   end

@@ -27,24 +27,50 @@ module SolidRespRactor
       Array.new(129) { |length| "*#{length}#{CRLF}".freeze },
     )
 
+    INTEGER_STRINGS = Ractor.make_shareable(
+      Array.new(1_024) { |integer| integer.to_s.freeze },
+    )
+    EMPTY_COMMAND = "RESP command cannot be empty"
+
     attr_reader :argument_encoder
 
     def initialize(argument_encoder: ArgumentEncoders::Default, expand_arrays: true)
       @argument_encoder = argument_encoder
       @expand_arrays = expand_arrays
+      @default_arguments = argument_encoder.equal?(ArgumentEncoders::Default)
       freeze
     end
 
     def encode(command)
-      unless @expand_arrays && command.any? { |argument| argument.is_a?(Array) }
-        return encode_flat(command)
-      end
+      length = command.length
+      raise ArgumentError, EMPTY_COMMAND if length.zero?
 
-      length = command.sum { |argument| expanded?(argument) ? argument.length : 1 }
-      raise ArgumentError, "RESP command cannot be empty" if length.zero?
+      buffer = +(ARRAY_HEADERS[length] || "*#{length}#{CRLF}")
+      index = 0
+      while index < length
+        argument = command[index]
+        if @default_arguments && argument.is_a?(String)
+          value = argument
+        elsif @expand_arrays && argument.is_a?(Array)
+          return encode_expanded(command)
+        else
+          value = encode_argument(argument)
+        end
+        bytesize = value.bytesize
+        buffer << (BULK_HEADERS[bytesize] || "$#{bytesize}#{CRLF}") << value << CRLF
+        index += 1
+      end
+      buffer
+    end
+
+    private
+
+    def encode_expanded(command)
+      length = command.sum { |argument| argument.is_a?(Array) ? argument.length : 1 }
+      raise ArgumentError, EMPTY_COMMAND if length.zero?
 
       command.each_with_object(+"*#{length}#{CRLF}") do |argument, buffer|
-        if expanded?(argument)
+        if argument.is_a?(Array)
           argument.each { |value| append_argument(buffer, value) }
         else
           append_argument(buffer, argument)
@@ -52,36 +78,26 @@ module SolidRespRactor
       end
     end
 
-    private
-
-    def encode_flat(command)
-      length = command.length
-      raise ArgumentError, "RESP command cannot be empty" if length.zero?
-
-      command.each_with_object(+array_header(length)) do |argument, buffer|
-        append_argument(buffer, argument)
-      end
-    end
-
-    def array_header(length)
-      ARRAY_HEADERS[length] || "*#{length}#{CRLF}"
-    end
-
-    def expanded?(argument)
-      @expand_arrays && argument.is_a?(Array)
-    end
-
     def append_argument(buffer, argument)
+      value = encode_argument(argument)
+      bytesize = value.bytesize
+      buffer << (BULK_HEADERS[bytesize] || "$#{bytesize}#{CRLF}") << value << CRLF
+    end
+
+    def encode_argument(argument)
+      if @default_arguments
+        return argument if argument.is_a?(String)
+        if argument.is_a?(Integer) && argument >= 0 && argument < 1_024
+          return INTEGER_STRINGS[argument]
+        end
+      end
+
       value = @argument_encoder.call(argument)
       unless value.is_a?(String)
         raise TypeError, "argument encoder must return a String, got #{value.class}"
       end
 
-      buffer << bulk_header(value.bytesize) << value << CRLF
-    end
-
-    def bulk_header(length)
-      BULK_HEADERS[length] || "$#{length}#{CRLF}"
+      value
     end
   end
 
