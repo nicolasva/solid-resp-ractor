@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-04
+
 ### Changed
 
 - Parse RESP integers and lengths in place from the read buffer, without
