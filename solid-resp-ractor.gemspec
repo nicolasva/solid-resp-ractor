@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
   spec.summary = "A modular, Ractor-friendly RESP2/RESP3 codec"
   spec.description = "Dependency-free RESP command encoding and stream decoding with injectable sources, selectors, clocks, error mappers, and RESP3 type handlers."
   spec.homepage = "https://github.com/nicolasva/solid-resp-ractor"
-  spec.license = "MIT"
+  spec.license = "LGPL-3.0-or-later"
   spec.required_ruby_version = ">= 3.1"
 
   spec.files = Dir["lib/**/*.rb", "README.md", "CHANGELOG.md", "LICENSE.txt"]

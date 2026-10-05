@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-05
+
+### Changed
+
+- Relicense the project from MIT to LGPL-3.0-or-later.
+
 ## [0.1.5] - 2026-10-04
 
 ### Changed
